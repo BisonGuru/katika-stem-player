@@ -207,7 +207,7 @@ where
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     on_stage("track-config");
     let track_cfg = json!({
-        "TrackColour": ["#FF6A00", "#FFFFFF"],
+        "TrackColour": ["#E03E3E", "#FFFFFF"],
         "tempos": [{"time_ms": 0, "tempo_bpm": 120}],
         "TrackGain_dB": 0,
         "metadata": {

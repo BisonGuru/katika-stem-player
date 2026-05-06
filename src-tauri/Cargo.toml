@@ -1,6 +1,6 @@
 [package]
 name = "stemplayer-mgr"
-version = "0.0.1"
+version = "0.0.2"
 description = "Desktop manager for the Yeezy/Kano Stem Player"
 authors = ["you"]
 edition = "2021"

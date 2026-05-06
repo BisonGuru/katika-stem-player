@@ -6,9 +6,9 @@
   --fg: #ededed;
   --fg-muted: #8b8b8b;
   --fg-dim: #5a5a5a;
-  --accent: #ff6a00;
-  --accent-soft: rgba(255, 106, 0, 0.14);
-  --accent-line: rgba(255, 106, 0, 0.55);
+  --accent: #E03E3E;
+  --accent-soft: rgba(224, 62, 62, 0.14);
+  --accent-line: rgba(224, 62, 62, 0.55);
   --ok: #4cd964;
   --err: #ff3b30;
   --border: #2a2a2a;
@@ -54,41 +54,13 @@ header {
   align-items: center;
   gap: 12px;
 }
-.brand-mark {
-  width: 32px;
-  height: 32px;
+img.brand-mark {
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  background:
-    repeating-radial-gradient(
-      circle at 50% 50%,
-      transparent 0 4px,
-      var(--accent-line) 4px 5px,
-      transparent 5px 9px,
-      var(--accent-line) 9px 10px,
-      transparent 10px 14px,
-      var(--accent-line) 14px 15px
-    );
-  background-color: #0c0c0c;
-  border: 1px solid var(--border-strong);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-.brand-mono {
-  font-family: "SF Pro", -apple-system, system-ui, sans-serif;
-  font-weight: 800;
-  font-size: 14px;
-  letter-spacing: 0;
-  color: var(--accent);
-  background: #0c0c0c;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
+  display: block;
+  object-fit: cover;
+  background: transparent;
 }
 .brand-text {
   display: flex;
@@ -535,7 +507,7 @@ section {
   position: absolute;
   inset: 0 auto 0 0;
   width: 0%;
-  background: linear-gradient(90deg, var(--accent) 0%, #ffaa55 100%);
+  background: linear-gradient(90deg, var(--accent) 0%, #ff7a7a 100%);
   border-radius: 3px;
   transition: width 250ms ease-out;
   box-shadow: 0 0 12px var(--accent-soft);
