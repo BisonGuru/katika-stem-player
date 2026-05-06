@@ -1,0 +1,44 @@
+[package]
+name = "stemplayer-mgr"
+version = "0.0.1"
+description = "Desktop manager for the Yeezy/Kano Stem Player"
+authors = ["you"]
+edition = "2021"
+rust-version = "1.77"
+
+# The Tauri 2 convention is to keep the binary small and put logic in a lib
+# that can be reused across desktop and (eventually) mobile.
+[lib]
+name = "stemplayer_mgr_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+
+# USB
+nusb = "0.1"
+
+# async runtime (Tauri uses tokio under the hood)
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "fs", "process", "io-util"] }
+
+# data
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Kano account API client (used for the device-auth challenge flow)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# error handling + logging
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+# default-run picks up tauri-build conventions
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

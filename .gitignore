@@ -1,0 +1,34 @@
+# Rust
+src-tauri/target/
+
+# Node (we don't actually use a bundler, but keep these out anyway)
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# OS
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tauri auto-generated
+src-tauri/gen/
+
+# Local-only build artifacts
+dist/
+build/
+*.dmg
+*.app
+
+# Local logs / scratchpads
+*.log
+/tmp_*
+
+# Cargo.lock IS committed for binary apps — do NOT add it here.

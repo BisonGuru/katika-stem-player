@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Katika Stem Player</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="brand-mono">K</span>
+        </div>
+        <div class="brand-text">
+          <h1>Katika</h1>
+          <span class="brand-sub">Stem Player</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="status" class="status disconnected">disconnected</span>
+        <button id="connect" class="primary">Connect</button>
+        <button id="disconnect" class="ghost" hidden>Disconnect</button>
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="icon-btn" hidden title="More">⋯</button>
+          <div id="menu" class="menu" hidden>
+            <button id="reboot" class="menu-item">Reboot device</button>
+            <button id="ping" class="menu-item">Show firmware version</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="library-section">
+        <div class="section-head">
+          <h2>Library</h2>
+          <div class="section-head-actions">
+            <button id="add-album" class="ghost small" hidden>＋ New album</button>
+            <button id="read-library" class="ghost small" hidden>Refresh</button>
+          </div>
+        </div>
+        <div id="albums" class="albums-grid"></div>
+        <div id="library-empty" class="empty-state" hidden>
+          <div class="empty-title">Connect a Stem Player to see your library</div>
+          <div class="empty-sub">Plug it in over USB, then click Connect.</div>
+        </div>
+      </section>
+
+      <section class="add-song-section">
+        <div class="section-head">
+          <h2>Add a song</h2>
+          <span id="demucs-pill" class="pill muted" title="Local stem-splitter status"></span>
+        </div>
+
+        <button id="drop-zone" class="drop-zone" disabled type="button">
+          <div class="drop-icon">↓</div>
+          <div class="drop-title">Drop a song here</div>
+          <div class="drop-sub">or click to browse</div>
+        </button>
+
+        <div id="picked-row" class="picked-row" hidden>
+          <div class="picked-info">
+            <div class="picked-name" id="picked-name"></div>
+            <div class="picked-path muted small" id="picked-path"></div>
+          </div>
+          <button id="picked-clear" class="icon-btn" title="Remove">×</button>
+        </div>
+
+        <div class="add-actions">
+          <button id="add-go" class="primary" disabled>Add to device</button>
+          <span id="add-hint" class="muted small"></span>
+        </div>
+
+        <div id="progress" class="progress" hidden>
+          <div class="progress-head">
+            <span id="progress-label">Working…</span>
+            <span id="progress-pct" class="muted small">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+        </div>
+      </section>
+
+      <details class="log">
+        <summary>Activity log</summary>
+        <pre id="log"></pre>
+      </details>
+    </main>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

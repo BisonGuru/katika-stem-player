@@ -1,0 +1,11 @@
+{
+  "name": "stemplayer-mgr",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Desktop manager for the Yeezy/Kano Stem Player",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {}
+}
