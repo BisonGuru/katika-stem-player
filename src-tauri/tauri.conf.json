@@ -37,7 +37,10 @@
       "icons/icon.ico"
     ],
     "category": "Music",
-    "shortDescription": "Katika — manage your Stem Player without depending on stemplayer.com",
-    "longDescription": "Katika is a standalone desktop manager for the Kano Stem Player. Browse the device library, add tracks, and split songs into stems locally — all without going through Kano's web app or cloud."
+    "shortDescription": "Katika \u2014 manage your Stem Player without depending on stemplayer.com",
+    "longDescription": "Katika is a standalone desktop manager for the Kano Stem Player. Browse the device library, add tracks, and split songs into stems locally \u2014 all without going through Kano's web app or cloud.",
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Jason Coles (S37KR9YR75)"
+    }
   }
 }
