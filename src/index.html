@@ -29,6 +29,12 @@
     </header>
 
     <main>
+      <nav class="tabs" id="tabs">
+        <button class="tab is-active" data-tab="library">Library</button>
+        <button class="tab" data-tab="debug">Debug</button>
+      </nav>
+
+      <div class="tab-panel" data-panel="library">
       <section class="library-section">
         <div class="section-head">
           <h2>Library</h2>
@@ -79,6 +85,86 @@
           </div>
         </div>
       </section>
+
+      </div><!-- /tab-panel:library -->
+
+      <div class="tab-panel" data-panel="debug" hidden>
+        <section class="debug-section">
+          <div class="section-head">
+            <h2>Raw command</h2>
+            <span class="muted small">0x04 sub-command + JSON payload &rarr; device</span>
+          </div>
+          <div class="row">
+            <label for="raw-sub">Sub-byte (hex)</label>
+            <input id="raw-sub" type="text" value="0x03" placeholder="0x03" />
+          </div>
+          <div class="row">
+            <label for="raw-payload">Payload JSON</label>
+            <textarea id="raw-payload" rows="3" placeholder='leave empty, or e.g. {"album":"A1"}'></textarea>
+          </div>
+          <div class="row">
+            <button id="raw-send" class="primary" disabled>Send 0x04</button>
+            <span class="muted small">VERSION=0x01 &middot; STORAGE=0x02 &middot; TRACKS=0x03 &middot; ALBUM_CFG=0x05 &middot; TRACK_CFG=0x06 &middot; ADD_ALBUM=0x08 &middot; DELETE_ALBUM=0x09 &middot; DELETE_TRACK=0x0a &middot; CHALLENGE=0x12 &middot; REBOOT=0x00</span>
+          </div>
+          <pre id="raw-resp" class="raw-resp" hidden></pre>
+        </section>
+
+        <section class="debug-section">
+          <div class="section-head">
+            <h2>Probe slots</h2>
+            <button id="probe-refresh" class="ghost small" disabled>Refresh slot list</button>
+          </div>
+          <div id="probe-grid" class="probe-grid">
+            <div class="muted small">Connect a device to enable probing.</div>
+          </div>
+        </section>
+
+        <section class="debug-section">
+          <div class="section-head">
+            <h2>Library dump</h2>
+            <button id="dump-refresh" class="ghost small" disabled>Re-dump GET_TRACKS_INFO</button>
+          </div>
+          <pre id="dump-resp" class="raw-resp" hidden></pre>
+        </section>
+
+        <section class="debug-section">
+          <div class="section-head">
+            <h2>Push file (raw)</h2>
+            <span class="muted small">Bypasses Demucs &mdash; for pushing arbitrary files</span>
+          </div>
+          <button id="raw-drop" class="drop-zone small-drop" disabled type="button">
+            <div class="drop-title">Pick a file</div>
+            <div class="drop-sub" id="raw-picked">(none)</div>
+          </button>
+          <div class="row">
+            <label for="raw-type">Type</label>
+            <select id="raw-type">
+              <option value="test" selected>test (safe — device rejects)</option>
+              <option value="device-config">device-config</option>
+              <option value="track">track</option>
+              <option value="album-config">album-config</option>
+              <option value="track-config">track-config</option>
+              <option value="stem-audio-mp3">stem-audio-mp3</option>
+              <option value="dfu">dfu (firmware!)</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="raw-name">Name</label>
+            <input id="raw-name" type="text" value="hello.txt" />
+          </div>
+          <div class="row">
+            <button id="raw-push" class="primary" disabled>Push to device</button>
+          </div>
+        </section>
+
+        <section class="debug-section">
+          <div class="section-head">
+            <h2>Activity log</h2>
+            <button id="log-clear" class="ghost small">Clear</button>
+          </div>
+          <pre id="log-debug" class="raw-resp tall"></pre>
+        </section>
+      </div><!-- /tab-panel:debug -->
 
       <details class="log">
         <summary>Activity log</summary>

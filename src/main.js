@@ -8,9 +8,13 @@ const $ = (sel) => document.querySelector(sel);
 // ---------- Activity log ----------
 const log = (msg, kind = "info") => {
   const ts = new Date().toLocaleTimeString();
-  const el = $("#log");
-  el.textContent += `[${ts}] [${kind}] ${msg}\n`;
-  el.scrollTop = el.scrollHeight;
+  const line = `[${ts}] [${kind}] ${msg}\n`;
+  for (const sel of ["#log", "#log-debug"]) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    el.textContent += line;
+    el.scrollTop = el.scrollHeight;
+  }
 };
 
 const setStatus = (text, cls) => {
@@ -535,4 +539,178 @@ async function setupDragDrop() {
   } catch (e) {
     log(`boot failed: ${e}`, "err");
   }
+})();
+
+
+// ---------- Debug tab wiring ----------
+(() => {
+  const tabBtns = document.querySelectorAll('.tabs .tab');
+  const panels = document.querySelectorAll('[data-panel]');
+  if (!tabBtns.length || !panels.length) return;
+
+  const setTab = (name) => {
+    tabBtns.forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
+    panels.forEach((p) => { p.hidden = p.dataset.panel !== name; });
+  };
+  tabBtns.forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+  const setBtn = (sel, enabled) => {
+    const el = document.querySelector(sel);
+    if (el) el.disabled = !enabled;
+  };
+
+  let rawPickedPath = null;
+
+  const updateDebugButtons = () => {
+    setBtn('#raw-send', isConnected);
+    setBtn('#probe-refresh', isConnected);
+    setBtn('#dump-refresh', isConnected);
+    setBtn('#raw-drop', isConnected);
+    setBtn('#raw-push', isConnected && rawPickedPath !== null);
+  };
+
+  // Re-evaluate debug button states every time the status pill mutates.
+  const statusEl = document.querySelector('#status');
+  if (statusEl) {
+    new MutationObserver(updateDebugButtons).observe(statusEl, {
+      childList: true, characterData: true, subtree: true, attributes: true
+    });
+  }
+  updateDebugButtons();
+
+  // ---------- Format response bytes for human inspection ----------
+  const formatBytes = (bytes) => {
+    const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join(' ');
+    const ascii = bytes.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
+    let parsed = '';
+    try {
+      let body = bytes.slice(1);
+      while (body.length && body[body.length - 1] === 0) body = body.slice(0, -1);
+      const text = String.fromCharCode(...body);
+      parsed = JSON.stringify(JSON.parse(text), null, 2);
+    } catch (_) { /* not JSON */ }
+    const out = [
+      bytes.length + ' bytes',
+      'hex:   ' + hex,
+      'ascii: ' + ascii,
+    ];
+    if (parsed) out.push('parsed:\n' + parsed);
+    return out.join('\n\n');
+  };
+
+  // ---------- Raw 0x04 sender ----------
+  document.querySelector('#raw-send').addEventListener('click', async () => {
+    const subStr = document.querySelector('#raw-sub').value.trim();
+    const sub = parseInt(subStr, 16);
+    if (Number.isNaN(sub) || sub < 0 || sub > 0xff) {
+      log('raw send: bad sub-byte ' + subStr, 'err');
+      return;
+    }
+    const payloadStr = document.querySelector('#raw-payload').value.trim();
+    let payload = null;
+    if (payloadStr) {
+      try { payload = JSON.parse(payloadStr); }
+      catch (e) { log('raw send: payload not valid JSON: ' + e, 'err'); return; }
+    }
+    const respEl = document.querySelector('#raw-resp');
+    respEl.hidden = false;
+    respEl.textContent = 'sending…';
+    log('raw 0x04 0x' + sub.toString(16).padStart(2, '0') + (payload ? ' ' + JSON.stringify(payload) : ''));
+    try {
+      const resp = await invoke('send_cmd', { sub, payload });
+      respEl.textContent = formatBytes(resp);
+      log('raw response: ' + resp.length + ' bytes');
+    } catch (e) {
+      respEl.textContent = 'error: ' + e;
+      log('raw send failed: ' + e, 'err');
+    }
+  });
+
+  // ---------- Probe slots ----------
+  const renderProbeGrid = (lib) => {
+    const root = document.querySelector('#probe-grid');
+    root.innerHTML = '';
+    const albums = Array.isArray(lib?.albums) ? lib.albums : [];
+    if (!albums.length) { root.innerHTML = '<div class="muted small">no slots</div>'; return; }
+    for (const album of albums) {
+      const id = album.id;
+      const card = document.createElement('div');
+      card.className = 'probe-card';
+      card.innerHTML = '<div class="probe-head"><span class="slot">' + id + '</span><button class="ghost small probe-btn">Probe</button></div><pre class="probe-resp raw-resp" hidden></pre>';
+      const btn = card.querySelector('.probe-btn');
+      const respEl = card.querySelector('.probe-resp');
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '…';
+        respEl.hidden = false; respEl.textContent = 'probing…';
+        try {
+          const resp = await invoke('send_cmd', { sub: 0x05, payload: { album: id } });
+          respEl.textContent = formatBytes(resp);
+          log('probe ' + id + ': ' + resp.length + ' bytes');
+        } catch (e) {
+          respEl.textContent = 'error: ' + e;
+          log('probe ' + id + ' failed: ' + e, 'err');
+        } finally {
+          btn.disabled = false; btn.textContent = 'Probe';
+        }
+      });
+      root.appendChild(card);
+    }
+  };
+
+  document.querySelector('#probe-refresh').addEventListener('click', async () => {
+    try {
+      const lib = await invoke('read_library');
+      renderProbeGrid(lib);
+    } catch (e) {
+      log('probe-refresh failed: ' + e, 'err');
+    }
+  });
+
+  // ---------- Library dump ----------
+  document.querySelector('#dump-refresh').addEventListener('click', async () => {
+    const respEl = document.querySelector('#dump-resp');
+    respEl.hidden = false; respEl.textContent = 'querying device…';
+    try {
+      const resp = await invoke('send_cmd', { sub: 0x03, payload: null });
+      respEl.textContent = formatBytes(resp);
+      log('library dump: ' + resp.length + ' bytes');
+    } catch (e) {
+      respEl.textContent = 'error: ' + e;
+      log('library dump failed: ' + e, 'err');
+    }
+  });
+
+  // ---------- Raw push ----------
+  document.querySelector('#raw-drop').addEventListener('click', async () => {
+    try {
+      const p = await invoke('plugin:dialog|open', { options: { multiple: false, filters: [] } });
+      if (!p) return;
+      rawPickedPath = p;
+      document.querySelector('#raw-picked').textContent = p;
+      const base = p.split('/').pop();
+      if (base) document.querySelector('#raw-name').value = base;
+      updateDebugButtons();
+    } catch (e) { log('raw file pick failed: ' + e, 'err'); }
+  });
+
+  document.querySelector('#raw-push').addEventListener('click', async () => {
+    if (!rawPickedPath) return;
+    const fileType = document.querySelector('#raw-type').value;
+    const name = document.querySelector('#raw-name').value || 'untitled';
+    log('raw push: ' + name + ' (type=' + fileType + ')');
+    try {
+      await invoke('push_file_cmd', { path: rawPickedPath, fileType, name });
+      log('raw push complete: ' + name);
+    } catch (e) {
+      log('raw push failed: ' + e, 'err');
+    }
+  });
+
+  // ---------- Clear log ----------
+  document.querySelector('#log-clear').addEventListener('click', () => {
+    for (const sel of ['#log', '#log-debug']) {
+      const el = document.querySelector(sel);
+      if (el) el.textContent = '';
+    }
+  });
 })();

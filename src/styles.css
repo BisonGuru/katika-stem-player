@@ -560,3 +560,129 @@ details.log pre {
   white-space: pre-wrap;
   border: 1px solid var(--border);
 }
+
+
+/* ---------- Tabs ---------- */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+}
+.tab:hover { color: var(--fg); }
+.tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-panel { display: block; }
+.tab-panel[hidden] { display: none; }
+
+/* ---------- Debug panel ---------- */
+.debug-section {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.row label {
+  width: 110px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 7px;
+}
+.row select,
+.row input[type="text"],
+.row textarea {
+  font: inherit;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 12.5px;
+  background: #0e0e0e;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  flex: 1;
+  max-width: 520px;
+  resize: vertical;
+}
+.row textarea { font-family: ui-monospace, "SF Mono", monospace; min-height: 64px; }
+
+.raw-resp {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 280px;
+  overflow: auto;
+}
+.raw-resp.tall { max-height: 380px; }
+
+/* Probe grid (per-slot test buttons) */
+.probe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+.probe-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.probe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.probe-card .slot {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.probe-resp {
+  margin-top: 8px;
+  max-height: 160px;
+  font-size: 11px;
+}
+
+/* Smaller drop zone for the raw-push area */
+.drop-zone.small-drop {
+  padding: 14px 16px;
+}
+.drop-zone.small-drop .drop-title { font-size: 12.5px; }
+.drop-zone.small-drop .drop-sub {
+  word-break: break-all;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 11px;
+}
