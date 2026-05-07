@@ -28,6 +28,7 @@ let pickedPath = null;
 let isConnected = false;
 let demucsAvailable = false;
 let highlightSlot = null;
+let cachedTracks = new Map(); // key: "<album_id>|<track_id_lower>" -> CachedTrack
 
 const AUDIO_EXTS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "aiff"];
 const isAudioFile = (path) =>
@@ -68,6 +69,8 @@ const setConnectedUI = (info) => {
   $("#read-library").hidden = false;
   $("#drop-zone").disabled = false;
   $("#library-empty").hidden = true;
+  $("#ping").disabled = false;
+  $("#reboot").disabled = false;
 
   setStatus(`connected · ${info.product ?? "Stem Player"}`, "connected");
   refreshAddButton();
@@ -78,10 +81,12 @@ const setDisconnectedUI = () => {
   isConnected = false;
   $("#connect").hidden = false;
   $("#disconnect").hidden = true;
-  $("#menu-toggle").hidden = true;
+  $("#menu-toggle").hidden = false;
   $("#menu").hidden = true;
   $("#add-album").hidden = true;
   $("#read-library").hidden = true;
+  $("#ping").disabled = true;
+  $("#reboot").disabled = true;
   $("#drop-zone").disabled = true;
   $("#albums").innerHTML = "";
   $("#library-empty").hidden = false;
@@ -183,6 +188,21 @@ const renderLibrary = (lib) => {
         const chip = document.createElement("span");
         chip.className = "track-chip";
 
+        const cacheKey = id + "|" + (tid || "").toLowerCase();
+        const cachedT = cachedTracks.get(cacheKey);
+        if (cachedT) {
+          const playBtn = document.createElement("button");
+          playBtn.className = "track-chip-play";
+          playBtn.title = "Play in Katika";
+          playBtn.textContent = "▶";
+          playBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            try { await player.load(cachedT); }
+            catch (err) { log("player load failed: " + err, "err"); }
+          });
+          chip.appendChild(playBtn);
+        }
+
         const name = document.createElement("span");
         name.className = "track-chip-name";
         name.textContent = num != null ? `Track ${num}` : tid;
@@ -198,6 +218,16 @@ const renderLibrary = (lib) => {
           try {
             log(`deleting track ${id}/${tid} …`);
             await invoke("delete_track", { album: id, track: tid });
+            // If the player is currently loaded with this exact track, close it.
+            if (player.current && player.current.album_id === id &&
+                (player.current.track_id || "").toLowerCase() === (tid || "").toLowerCase()) {
+              player.stop();
+              player.buffers = null;
+              player.current = null;
+              document.body.classList.remove("has-player");
+              document.querySelector("#player").hidden = true;
+              log("player closed (track was deleted)");
+            }
             await loadLibrary();
           } catch (err) {
             log(`delete track failed: ${err}`, "err");
@@ -214,23 +244,34 @@ const renderLibrary = (lib) => {
     // Right-side actions
     const actions = document.createElement("div");
     actions.className = "album-row-actions";
-    if (isUserUpload) {
+    {
       const delAlbum = document.createElement("button");
       delAlbum.className = "row-action-btn icon-btn";
       delAlbum.textContent = "🗑";
-      delAlbum.title = "Delete album";
+      delAlbum.title = isBuiltin ? "Delete built-in album (firmware may reject)" : "Delete album";
       delAlbum.addEventListener("click", async () => {
-        const ok = tracks.length === 0
-          ? true
-          : confirm(`Delete this album? This will remove ${tracks.length} track(s).`);
+        let ok;
+        if (isBuiltin) {
+          ok = confirm(
+            `Delete built-in album "${label}" from slot ${id}?\n\n` +
+            "Built-in slots are usually protected by the firmware. " +
+            "If the device rejects this, the album will reappear on the next refresh."
+          );
+        } else if (tracks.length === 0) {
+          ok = true;
+        } else {
+          ok = confirm(`Delete this album? This will remove ${tracks.length} track(s).`);
+        }
         if (!ok) return;
         delAlbum.disabled = true;
         try {
           log(`deleting album ${id} …`);
           await invoke("delete_album", { album: id });
-          await loadLibrary();
+          log(`deleted album ${id}`);
         } catch (err) {
-          log(`delete album failed: ${err}`, "err");
+          log(`delete album ${id} failed: ${err}`, "err");
+        } finally {
+          await loadLibrary();
           delAlbum.disabled = false;
         }
       });
@@ -259,10 +300,18 @@ async function loadLibrary() {
   if (!isConnected) return;
   renderLibraryPlaceholder("loading…");
   try {
-    const lib = await invoke("read_library");
+    const [lib, cached] = await Promise.all([
+      invoke("read_library"),
+      invoke("list_cached_tracks").catch(() => []),
+    ]);
+    cachedTracks = new Map();
+    for (const t of cached) {
+      const key = (t.album_id || "") + "|" + (t.track_id || "").toLowerCase();
+      cachedTracks.set(key, t);
+    }
     renderLibrary(lib);
     const slotCount = Array.isArray(lib?.albums) ? lib.albums.length : 0;
-    log(`library: ${slotCount} slot(s)`);
+    log(`library: ${slotCount} slot(s) · ${cached.length} cached locally`);
   } catch (e) {
     log(`library fetch failed: ${e}`, "err");
     renderLibraryPlaceholder(`library fetch failed: ${e}`);
@@ -361,14 +410,41 @@ document.addEventListener("click", (e) => {
 
 $("#ping").addEventListener("click", async () => {
   $("#menu").hidden = true;
+  if (isConnected) {
+    try {
+      const resp = await invoke("send_cmd", { sub: 0x01, payload: null });
+      const ascii = resp
+        .map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : "."))
+        .join("");
+      log(`firmware version: ${ascii}`);
+      // Pretty alert with parsed JSON if possible.
+      try {
+        let body = resp.slice(1);
+        while (body.length && body[body.length - 1] === 0) body = body.slice(0, -1);
+        const text = String.fromCharCode(...body);
+        const parsed = JSON.parse(text);
+        alert("Stem Player firmware\n\n" + JSON.stringify(parsed, null, 2));
+      } catch (_) { /* ignore — log already shown */ }
+    } catch (e) {
+      log(`version query failed: ${e}`, "err");
+    }
+    return;
+  }
+  // Disconnected fallback — show last-known firmware from local cache.
   try {
-    const resp = await invoke("send_cmd", { sub: 0x01, payload: null });
-    const ascii = resp
-      .map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : "."))
-      .join("");
-    log(`firmware version: ${ascii}`);
+    const cached = await invoke("read_cached_firmware");
+    if (!cached) {
+      alert("Connect a Stem Player first.\n\nKatika has no cached firmware version yet.");
+      return;
+    }
+    const when = new Date(cached.captured_at * 1000).toLocaleString();
+    alert(
+      "Last-known Stem Player firmware (offline)\n\n" +
+      JSON.stringify(cached.firmware, null, 2) +
+      "\n\n(as of " + when + ")"
+    );
   } catch (e) {
-    log(`version query failed: ${e}`, "err");
+    log(`cached firmware lookup failed: ${e}`, "err");
   }
 });
 
@@ -499,11 +575,27 @@ async function setupDragDrop() {
 // ---------- Boot ----------
 (async () => {
   try {
+    // Surface the app version in the header — pulls from Cargo.toml at runtime.
+    try {
+      const v = await window.__TAURI__?.app?.getVersion?.();
+      const el = document.querySelector('#app-version');
+      if (el && v) el.textContent = 'v' + v;
+    } catch (_) { /* non-fatal */ }
     if (!window.__TAURI__ || !window.__TAURI__.core) {
       log("Tauri global not available", "err");
       return;
     }
     setupDragDrop().catch((e) => log(`drag-drop init failed: ${e}`, "err"));
+
+    // Surface the most recently cached firmware version, if any, so the
+    // user can see it even before they connect.
+    try {
+      const cached = await invoke("read_cached_firmware");
+      if (cached?.firmware?.appver) {
+        const when = new Date(cached.captured_at * 1000).toLocaleString();
+        log("last-known firmware appver " + cached.firmware.appver + " (as of " + when + ")");
+      }
+    } catch (_) { /* non-fatal */ }
 
     // Demucs probe → small status pill.
     try {
@@ -714,3 +806,233 @@ async function setupDragDrop() {
     }
   });
 })();
+
+
+// ---------- In-app player (WebAudio 4-stem mixer) ----------
+class StemPlayer {
+  constructor() {
+    this.ctx = null;            // AudioContext (lazy on first user gesture)
+    this.buffers = null;         // {vocals, bass, drums, other}
+    this.sources = null;         // current AudioBufferSourceNode set
+    this.gains = null;           // {vocals, bass, drums, other}
+    this.master = null;          // master GainNode
+    this.savedGain = {};         // before-mute values
+    this.muted = { vocals: false, bass: false, drums: false, other: false };
+    this.startedAt = 0;          // ctx.currentTime at last play start (minus offset)
+    this.pausedAt = 0;           // offset in seconds when paused
+    this.playing = false;
+    this.current = null;         // CachedTrack metadata for the loaded song
+    this.uiTick = null;
+  }
+
+  ensureCtx() {
+    if (!this.ctx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new Ctx();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 1;
+      this.master.connect(this.ctx.destination);
+      this.gains = {
+        vocals: this.ctx.createGain(),
+        bass:   this.ctx.createGain(),
+        drums:  this.ctx.createGain(),
+        other:  this.ctx.createGain(),
+      };
+      for (const g of Object.values(this.gains)) g.connect(this.master);
+    }
+    if (this.ctx.state === "suspended") this.ctx.resume();
+  }
+
+  async load(track) {
+    this.ensureCtx();
+    this.stop();
+    log(`player: loading "${track.title}"`);
+    const convert = window.__TAURI__?.core?.convertFileSrc;
+    if (!convert) throw new Error("convertFileSrc unavailable");
+
+    const fetchStem = async (path) => {
+      const url = convert(path);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`fetch ${path}: ${resp.status}`);
+      const buf = await resp.arrayBuffer();
+      return await this.ctx.decodeAudioData(buf);
+    };
+
+    const [vocals, bass, drums, other] = await Promise.all([
+      fetchStem(track.vocals),
+      fetchStem(track.bass),
+      fetchStem(track.drums),
+      fetchStem(track.other),
+    ]);
+    this.buffers = { vocals, bass, drums, other };
+    this.current = track;
+    this.pausedAt = 0;
+    this.updateUiMeta();
+    document.body.classList.add("has-player");
+    document.querySelector("#player").hidden = false;
+    this.play(0);
+  }
+
+  play(offset = 0) {
+    if (!this.buffers) return;
+    this.stop();
+    const startTime = this.ctx.currentTime + 0.05; // tiny lead so all 4 sources start aligned
+    this.sources = {};
+    for (const [name, buf] of Object.entries(this.buffers)) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.gains[name]);
+      src.start(startTime, offset);
+      this.sources[name] = src;
+    }
+    this.startedAt = startTime - offset;
+    this.playing = true;
+    this.updateUiPlayPause();
+    this.beginUiTick();
+  }
+
+  stop() {
+    if (this.sources) {
+      for (const src of Object.values(this.sources)) {
+        try { src.stop(); } catch (_) { /* may already be stopped */ }
+      }
+      this.sources = null;
+    }
+    this.playing = false;
+    this.endUiTick();
+    this.updateUiPlayPause();
+  }
+
+  pause() {
+    if (!this.playing) return;
+    this.pausedAt = this.ctx.currentTime - this.startedAt;
+    this.stop();
+  }
+
+  toggle() {
+    if (!this.buffers) return;
+    if (this.playing) this.pause();
+    else this.play(this.pausedAt);
+  }
+
+  seek(offset) {
+    if (!this.buffers) return;
+    const dur = this.duration();
+    offset = Math.max(0, Math.min(dur, offset));
+    const wasPlaying = this.playing;
+    this.stop();
+    this.pausedAt = offset;
+    if (wasPlaying) this.play(offset);
+    else this.updateUiTime();
+  }
+
+  currentTime() {
+    if (this.playing) return this.ctx.currentTime - this.startedAt;
+    return this.pausedAt;
+  }
+
+  duration() {
+    return this.buffers?.vocals?.duration ?? 0;
+  }
+
+  setStem(name, v01) {
+    if (!this.gains?.[name]) return;
+    this.savedGain[name] = v01;
+    if (!this.muted[name]) this.gains[name].gain.value = v01;
+  }
+
+  setMaster(v01) {
+    if (this.master) this.master.gain.value = v01;
+  }
+
+  toggleMute(name) {
+    if (!this.gains?.[name]) return;
+    this.muted[name] = !this.muted[name];
+    this.gains[name].gain.value = this.muted[name] ? 0 : (this.savedGain[name] ?? 1);
+    return this.muted[name];
+  }
+
+  // ---------- UI helpers ----------
+  beginUiTick() {
+    this.endUiTick();
+    this.uiTick = setInterval(() => this.updateUiTime(), 200);
+  }
+  endUiTick() {
+    if (this.uiTick) { clearInterval(this.uiTick); this.uiTick = null; }
+  }
+  updateUiMeta() {
+    const t = this.current;
+    if (!t) return;
+    document.querySelector("#player-title").textContent = t.title || "(untitled)";
+    document.querySelector("#player-sub").textContent =
+      `${t.album_id || ""}/${(t.track_id || "").toLowerCase()} · ${t.artist || ""}`;
+    document.querySelector("#player-time-tot").textContent = fmtTime(this.duration());
+    this.updateUiTime();
+  }
+  updateUiTime() {
+    const cur = this.currentTime();
+    const dur = this.duration();
+    if (dur > 0 && cur >= dur) {
+      // playback past the end — stop and reset
+      this.pausedAt = 0;
+      this.stop();
+    }
+    const seek = document.querySelector("#player-seek");
+    if (seek && document.activeElement !== seek) {
+      const pct = dur ? Math.round((cur / dur) * 1000) : 0;
+      seek.value = pct;
+      seek.style.setProperty("--played", `${pct / 10}%`);
+    }
+    document.querySelector("#player-time-cur").textContent = fmtTime(cur);
+  }
+  updateUiPlayPause() {
+    document.querySelector(".ico-play").hidden = this.playing;
+    document.querySelector(".ico-pause").hidden = !this.playing;
+  }
+}
+
+function fmtTime(s) {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60).toString().padStart(2, "0");
+  return `${m}:${sec}`;
+}
+
+const player = new StemPlayer();
+
+// Wire player UI events (these run safely even before the player is shown)
+document.querySelector("#player-toggle").addEventListener("click", () => player.toggle());
+document.querySelector("#player-close").addEventListener("click", () => {
+  player.stop();
+  player.buffers = null;
+  player.current = null;
+  document.body.classList.remove("has-player");
+  document.querySelector("#player").hidden = true;
+});
+
+const seekEl = document.querySelector("#player-seek");
+seekEl.addEventListener("input", () => {
+  // Update visual fill while dragging
+  seekEl.style.setProperty("--played", `${seekEl.value / 10}%`);
+});
+seekEl.addEventListener("change", () => {
+  const dur = player.duration();
+  player.seek((seekEl.value / 1000) * dur);
+});
+
+document.querySelectorAll("[data-stem-slider]").forEach((slider) => {
+  const stem = slider.dataset.stemSlider;
+  slider.addEventListener("input", () => {
+    const v = slider.value / 100;
+    if (stem === "master") player.setMaster(v);
+    else player.setStem(stem, v);
+  });
+});
+
+document.querySelectorAll("[data-stem-mute]").forEach((btn) => {
+  const stem = btn.dataset.stemMute;
+  btn.addEventListener("click", () => {
+    const muted = player.toggleMute(stem);
+    btn.classList.toggle("is-muted", !!muted);
+  });
+});

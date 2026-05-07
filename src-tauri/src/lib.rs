@@ -7,6 +7,9 @@
 mod auth;
 mod stemplayer;
 mod stems;
+mod cache;
+
+
 
 use std::sync::Arc;
 use tauri::Emitter;
@@ -43,6 +46,46 @@ fn emit_progress(app: &tauri::AppHandle, stage: &'static str, pct: f32, message:
 /// `None` means "not connected"; only one device is supported at a time
 /// (the first Stem Player we see, since the protocol uses session state).
 type SharedDevice = Arc<Mutex<Option<StemDevice>>>;
+
+
+/// Heuristic: does this error string look like a transient USB disconnect
+/// that we should try to recover from by re-opening + re-auth?
+fn is_transient_disconnect(s: &str) -> bool {
+    let s = s.to_lowercase();
+    s.contains("device disconnected")
+        || s.contains("disconnected")
+        || s.contains("no such device")
+        || s.contains("usb read timeout")
+        || s.contains("io error")
+        || s.contains("ioerror")
+        || s.contains("transfer timed out")
+        || s.contains("not connected")
+        || s.contains("endpoint stalled")
+}
+
+/// Drop the current StemDevice, re-open via the cached descriptor, and
+/// re-run the Kano cloud auth challenge. The Stem Player auto-sleeps
+/// after ~15s of USB silence and drops off the bus; this restores the
+/// session after the user taps the puck to wake it.
+async fn reconnect(state: &tauri::State<'_, SharedDevice>) -> Result<(), String> {
+    let info = {
+        let guard = state.lock().await;
+        guard.as_ref().ok_or_else(|| "Not connected".to_string())?.info().clone()
+    };
+    {
+        let mut guard = state.lock().await;
+        *guard = None;
+    }
+    let mut dev = StemDevice::open(&info).await.map_err(|e| e.to_string())?;
+    let serial = info.serial.clone().unwrap_or_default();
+    auth::authenticate(&mut dev, &serial).await.map_err(|e| e.to_string())?;
+    {
+        let mut guard = state.lock().await;
+        *guard = Some(dev);
+    }
+    tracing::info!("reconnected after transient disconnect");
+    Ok(())
+}
 
 #[tauri::command]
 async fn list_devices() -> Result<Vec<DeviceInfo>, String> {
@@ -101,19 +144,39 @@ async fn send_cmd(
     sub: u8,
     payload: Option<serde_json::Value>,
 ) -> Result<Vec<u8>, String> {
-    let mut guard = state.lock().await;
-    let dev = guard
-        .as_mut()
-        .ok_or_else(|| "Not connected".to_string())?;
-
-    let cmd = if let Some(payload) = payload {
-        Cmd04::with_json(sub, &payload).map_err(|e| e.to_string())?
-    } else {
-        Cmd04::bare(sub)
-    };
-    dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
-    let resp = dev.read_response().await.map_err(|e| e.to_string())?;
-    Ok(resp)
+    let mut last_err: Option<String> = None;
+    for attempt in 0..=1 {
+        let res: Result<Vec<u8>, String> = async {
+            let mut guard = state.lock().await;
+            let dev = guard
+                .as_mut()
+                .ok_or_else(|| "Not connected".to_string())?;
+            let cmd = if let Some(ref p) = payload {
+                Cmd04::with_json(sub, p).map_err(|e| e.to_string())?
+            } else {
+                Cmd04::bare(sub)
+            };
+            dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
+            let bytes = dev.read_response().await.map_err(|e| e.to_string())?;
+            // Side-effect: cache firmware response when sub=0x01 (VERSION).
+            if sub == 0x01 {
+                let _ = cache_firmware_response(&bytes).await;
+            }
+            Ok(bytes)
+        }.await;
+        match res {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt == 0 && is_transient_disconnect(&e) => {
+                tracing::warn!("send_cmd 0x{:02x}: {} — reconnecting", sub, e);
+                if let Err(reconnect_err) = reconnect(&state).await {
+                    return Err(format!("reconnect failed: {reconnect_err} (after: {e})"));
+                }
+                continue;
+            }
+            Err(e) => { last_err = Some(e); break; }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "send_cmd: unknown error".into()))
 }
 
 /// Convenience wrapper: enumerate all albums + tracks on the device.
@@ -164,17 +227,37 @@ async fn delete_track(
     album: String,
     track: String,
 ) -> Result<(), String> {
-    let mut guard = state.lock().await;
-    let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
-    let cmd = stemplayer::commands::Cmd04::with_json(
-        stemplayer::commands::sub::DELETE_TRACK,
-        &serde_json::json!({ "album": album, "track": track }),
-    )
-    .map_err(|e| e.to_string())?;
-    dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
-    let _ = dev.read_response().await;
-    tracing::info!("DELETE_TRACK {}/{} sent", album, track);
-    Ok(())
+    let mut last_err: Option<String> = None;
+    for attempt in 0..=1 {
+        let res: Result<(), String> = async {
+            let mut guard = state.lock().await;
+            let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let cmd = stemplayer::commands::Cmd04::with_json(
+                stemplayer::commands::sub::DELETE_TRACK,
+                &serde_json::json!({ "album": album, "track": track }),
+            )
+            .map_err(|e| e.to_string())?;
+            dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
+            let _ = dev.read_response().await;
+            Ok(())
+        }.await;
+        match res {
+            Ok(()) => {
+                tracing::info!("DELETE_TRACK {}/{} sent", album, track);
+                let _ = cache::delete_by_album_track(&album, &track).await;
+                return Ok(());
+            }
+            Err(e) if attempt == 0 && is_transient_disconnect(&e) => {
+                tracing::warn!("delete_track {}/{}: {} — reconnecting", album, track, e);
+                if let Err(reconnect_err) = reconnect(&state).await {
+                    return Err(format!("reconnect failed: {reconnect_err} (after: {e})"));
+                }
+                continue;
+            }
+            Err(e) => { last_err = Some(e); break; }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "delete_track: unknown error".into()))
 }
 
 /// Delete an album (and all its tracks). Wraps `0x04 0x09 DELETE_ALBUM`.
@@ -183,17 +266,37 @@ async fn delete_album(
     state: tauri::State<'_, SharedDevice>,
     album: String,
 ) -> Result<(), String> {
-    let mut guard = state.lock().await;
-    let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
-    let cmd = stemplayer::commands::Cmd04::with_json(
-        stemplayer::commands::sub::DELETE_ALBUM,
-        &serde_json::json!({ "album": album }),
-    )
-    .map_err(|e| e.to_string())?;
-    dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
-    let _ = dev.read_response().await;
-    tracing::info!("DELETE_ALBUM {} sent", album);
-    Ok(())
+    let mut last_err: Option<String> = None;
+    for attempt in 0..=1 {
+        let res: Result<(), String> = async {
+            let mut guard = state.lock().await;
+            let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let cmd = stemplayer::commands::Cmd04::with_json(
+                stemplayer::commands::sub::DELETE_ALBUM,
+                &serde_json::json!({ "album": album }),
+            )
+            .map_err(|e| e.to_string())?;
+            dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
+            let _ = dev.read_response().await;
+            Ok(())
+        }.await;
+        match res {
+            Ok(()) => {
+                tracing::info!("DELETE_ALBUM {} sent", album);
+                let _ = cache::delete_by_album(&album).await;
+                return Ok(());
+            }
+            Err(e) if attempt == 0 && is_transient_disconnect(&e) => {
+                tracing::warn!("delete_album {}: {} — reconnecting", album, e);
+                if let Err(reconnect_err) = reconnect(&state).await {
+                    return Err(format!("reconnect failed: {reconnect_err} (after: {e})"));
+                }
+                continue;
+            }
+            Err(e) => { last_err = Some(e); break; }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "delete_album: unknown error".into()))
 }
 
 /// Enriched album entry returned to the frontend.
@@ -227,6 +330,24 @@ struct Library {
 /// a couple dozen slots it's still fast enough to call on every refresh.
 #[tauri::command]
 async fn read_library(state: tauri::State<'_, SharedDevice>) -> Result<Library, String> {
+    let mut last_err: Option<String> = None;
+    for attempt in 0..=1 {
+        match read_library_inner(&state).await {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt == 0 && is_transient_disconnect(&e) => {
+                tracing::warn!("read_library: {} — reconnecting", e);
+                if let Err(re) = reconnect(&state).await {
+                    return Err(format!("reconnect failed: {re} (after: {e})"));
+                }
+                continue;
+            }
+            Err(e) => { last_err = Some(e); break; }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "read_library: unknown error".into()))
+}
+
+async fn read_library_inner(state: &tauri::State<'_, SharedDevice>) -> Result<Library, String> {
     let mut guard = state.lock().await;
     let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
 
@@ -345,18 +466,35 @@ async fn reboot_device(
 /// returns the new slot's ID so the frontend can highlight it.
 #[tauri::command]
 async fn add_album(state: tauri::State<'_, SharedDevice>) -> Result<String, String> {
-    let mut guard = state.lock().await;
-    let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
-    let slot = pick_fresh_album_slot(dev).await?;
-    let cmd = stemplayer::commands::Cmd04::with_json(
-        stemplayer::commands::sub::ADD_ALBUM,
-        &serde_json::json!({ "album": slot }),
-    )
-    .map_err(|e| e.to_string())?;
-    dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
-    let _ = dev.read_response().await;
-    tracing::info!("ADD_ALBUM {} (manual) sent", slot);
-    Ok(slot)
+    let mut last_err: Option<String> = None;
+    for attempt in 0..=1 {
+        let res: Result<String, String> = async {
+            let mut guard = state.lock().await;
+            let dev = guard.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let slot = pick_fresh_album_slot(dev).await?;
+            let cmd = stemplayer::commands::Cmd04::with_json(
+                stemplayer::commands::sub::ADD_ALBUM,
+                &serde_json::json!({ "album": slot }),
+            )
+            .map_err(|e| e.to_string())?;
+            dev.send_command(&cmd).await.map_err(|e| e.to_string())?;
+            let _ = dev.read_response().await;
+            tracing::info!("ADD_ALBUM {} (manual) sent", slot);
+            Ok(slot)
+        }.await;
+        match res {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt == 0 && is_transient_disconnect(&e) => {
+                tracing::warn!("add_album: {} — reconnecting", e);
+                if let Err(reconnect_err) = reconnect(&state).await {
+                    return Err(format!("reconnect failed: {reconnect_err} (after: {e})"));
+                }
+                continue;
+            }
+            Err(e) => { last_err = Some(e); break; }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "add_album: unknown error".into()))
 }
 
 /// Whether Demucs is installed and runnable.
@@ -557,6 +695,17 @@ async fn split_and_push(
     // Album-config + 4 stems + track-config + done = 7 stages; we fan
     // them out across 70..100% of the bar.
     let app_for_push = app.clone();
+    let cache_global_id = global_id.clone();
+    let cache_title = title.clone();
+    let cache_album = album_id.to_string();
+    let cache_track = track_id.to_string();
+    let cache_timestamp = timestamp.clone();
+    let cache_vocals = result.vocals.clone();
+    let cache_bass = result.bass.clone();
+    let cache_drums = result.drums.clone();
+    let cache_other = result.other.clone();
+    let cache_original = std::path::PathBuf::from(&path);
+
     stemplayer::files::push_track_bundle_with_progress(dev, &bundle, move |stage| {
         let (pct, msg) = match stage {
             "album-config" => (70.0, "Uploading album info…"),
@@ -572,6 +721,23 @@ async fn split_and_push(
     })
     .await
     .map_err(|e| e.to_string())?;
+
+    // Persist a local mirror of this upload so the in-app player can serve it.
+    let _ = cache::cache_track(
+        &cache_global_id,
+        &cache_title,
+        "Katika upload",
+        &cache_album,
+        &cache_track,
+        &cache_timestamp,
+        &cache::CachedStemPaths {
+            vocals: &cache_vocals,
+            bass: &cache_bass,
+            drums: &cache_drums,
+            other: &cache_other,
+        },
+        Some(&cache_original),
+    ).await;
 
     emit_progress(&app, "done", 100.0, "Done");
     Ok(result)
@@ -663,6 +829,63 @@ async fn pick_fresh_album_slot(dev: &mut StemDevice) -> Result<String, String> {
     Err("no free album slot in A5..A99".into())
 }
 
+
+/// List every locally-cached track (one entry per `~/Library/Application Support/Katika/library/<global_id>/`).
+#[tauri::command]
+async fn list_cached_tracks() -> Result<Vec<cache::CachedTrack>, String> {
+    cache::list_tracks().await.map_err(|e| e.to_string())
+}
+
+/// Resolve a single cached track by global_id.
+#[tauri::command]
+async fn get_cached_track(global_id: String) -> Result<Option<cache::CachedTrack>, String> {
+    cache::get_track(&global_id).await.map_err(|e| e.to_string())
+}
+
+
+/// Persist the most recent firmware-version response (raw 0x04 0x01 reply
+/// from the device) so the frontend can show it even when disconnected.
+async fn cache_firmware_response(bytes: &[u8]) -> std::io::Result<()> {
+    if bytes.is_empty() { return Ok(()); }
+    let mut body = &bytes[1..]; // strip echoed sub-byte
+    while body.last() == Some(&0) { body = &body[..body.len() - 1]; }
+    let parsed: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => serde_json::Value::String(String::from_utf8_lossy(body).into_owned()),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let bundle = serde_json::json!({ "firmware": parsed, "captured_at": now });
+
+    let dir = cache::cache_root().parent().map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::write(dir.join("firmware.json"), serde_json::to_vec_pretty(&bundle).unwrap()).await
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CachedFirmware {
+    firmware: serde_json::Value,
+    captured_at: u64,
+}
+
+/// Read back the most recently cached firmware-version response. Returns
+/// None if we've never queried VERSION before on this machine.
+#[tauri::command]
+async fn read_cached_firmware() -> Result<Option<CachedFirmware>, String> {
+    let dir = cache::cache_root().parent().map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    let path = dir.join("firmware.json");
+    if !path.exists() { return Ok(None); }
+    let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let firmware = parsed.get("firmware").cloned().unwrap_or(serde_json::Value::Null);
+    let captured_at = parsed.get("captured_at").and_then(|v| v.as_u64()).unwrap_or(0);
+    Ok(Some(CachedFirmware { firmware, captured_at }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -693,6 +916,9 @@ pub fn run() {
             reboot_device,
             add_album,
             read_library,
+            list_cached_tracks,
+            get_cached_track,
+            read_cached_firmware,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

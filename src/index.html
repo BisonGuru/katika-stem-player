@@ -13,6 +13,7 @@
           <h1>Katika</h1>
           <span class="brand-sub">Stem Player</span>
         </div>
+        <span id="app-version" class="app-version" title="Katika app version"></span>
       </div>
       <div class="header-actions">
         <span id="status" class="status disconnected">disconnected</span>
@@ -172,6 +173,53 @@
       </details>
     </main>
 
+
+    <div id="player" class="player" hidden>
+      <div class="player-row">
+        <button id="player-toggle" class="player-play" type="button" aria-label="Play / pause">
+          <svg viewBox="0 0 24 24" width="20" height="20" class="ico-play">
+            <path fill="currentColor" d="M8 5v14l11-7z"/>
+          </svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" class="ico-pause" hidden>
+            <path fill="currentColor" d="M6 5h4v14H6zM14 5h4v14h-4z"/>
+          </svg>
+        </button>
+        <div class="player-meta">
+          <div class="player-title" id="player-title">—</div>
+          <div class="player-sub" id="player-sub">—</div>
+        </div>
+        <div class="player-scrubber">
+          <span class="player-time" id="player-time-cur">0:00</span>
+          <input id="player-seek" class="player-seek" type="range" min="0" max="1000" value="0" />
+          <span class="player-time" id="player-time-tot">0:00</span>
+        </div>
+        <button id="player-close" class="icon-btn" title="Close player">×</button>
+      </div>
+      <div class="player-stems">
+        <div class="stem-strip" data-stem="vocals">
+          <div class="stem-head"><span class="stem-name">Vocals</span><button class="stem-mute icon-btn" data-stem-mute="vocals" title="Mute">M</button></div>
+          <input class="stem-slider" type="range" min="0" max="100" value="100" data-stem-slider="vocals" />
+        </div>
+        <div class="stem-strip" data-stem="bass">
+          <div class="stem-head"><span class="stem-name">Bass</span><button class="stem-mute icon-btn" data-stem-mute="bass" title="Mute">M</button></div>
+          <input class="stem-slider" type="range" min="0" max="100" value="100" data-stem-slider="bass" />
+        </div>
+        <div class="stem-strip" data-stem="drums">
+          <div class="stem-head"><span class="stem-name">Drums</span><button class="stem-mute icon-btn" data-stem-mute="drums" title="Mute">M</button></div>
+          <input class="stem-slider" type="range" min="0" max="100" value="100" data-stem-slider="drums" />
+        </div>
+        <div class="stem-strip" data-stem="other">
+          <div class="stem-head"><span class="stem-name">Other</span><button class="stem-mute icon-btn" data-stem-mute="other" title="Mute">M</button></div>
+          <input class="stem-slider" type="range" min="0" max="100" value="100" data-stem-slider="other" />
+        </div>
+        <div class="stem-strip stem-master" data-stem="master">
+          <div class="stem-head"><span class="stem-name">Master</span></div>
+          <input class="stem-slider" type="range" min="0" max="100" value="100" data-stem-slider="master" />
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="main.js"></script>
+
   </body>
 </html>
